@@ -1,0 +1,106 @@
+import time
+import network
+from umqtt.simple import MQTTClient
+from machine import Pin, PWM
+
+# Configurações de Wi-Fi e MQTT
+ssid = "Wokwi-GUEST"
+password = ""
+mqtt_server = "test.mosquitto.org"
+topic_subscribe = "/ThinkIOT/Servo-nodered"
+
+# Lista para armazenar os dados (dataframe-like)
+data_log = []
+
+# Conectando ao Wi-Fi
+def connect_wifi():
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+    wlan.connect(ssid, password)
+
+    # Aguarda a conexão
+    while not wlan.isconnected():
+        print("Connecting to WiFi...")
+        time.sleep(1)
+    print("WiFi connected")
+    print("IP address: ", wlan.ifconfig()[0])
+
+# Função de callback para quando uma mensagem é recebida
+def on_message(topic, msg):
+    global data_log, start_time
+    print(f"Message received: {msg} on topic {topic.decode()}")
+    try:
+        status = int(msg.decode())
+        # Definindo ângulos específicos com base no payload recebido
+        if status == 0:  # Direita
+            servo_left_pos = 45  # Ângulo do servo esquerdo para virar à direita
+            servo_right_pos = 45  # Ângulo do servo direito para virar à direita
+        elif status == 100:  # Esquerda
+            servo_left_pos = 90  # Ângulo do servo esquerdo para virar à esquerda
+            servo_right_pos = 90  # Ângulo do servo direito para virar à esquerda
+        elif status == 50:
+            servo_left_pos = 0
+            servo_right_pos = 0
+        else:
+            print("Invalid status value received. Expected 0, 50, or 100.")
+            return
+
+        # Mapeamento dos ângulos para valores de PWM duty cycle
+        duty_left = map_value(servo_left_pos, 0, 360, 25, 128)
+        duty_right = map_value(servo_right_pos, 0, 360, 25, 128)
+
+        # Ajustando os servos para os ângulos desejados
+        servo.duty(duty_left)
+        servo2.duty(duty_right)
+
+        print(f"Servo positions set to {servo_left_pos} (duty: {duty_left}) and {servo_right_pos} (duty: {duty_right})")
+
+        # Calcula o tempo desde o início do programa
+        elapsed_time = time.time() - start_time
+        # Armazena o payload e o tempo no data_log
+        data_log.append([status, elapsed_time])
+        print(f"Data log updated: {data_log}")
+
+    except ValueError:
+        print("Invalid payload received. Expected an integer.")
+
+# Função para mapear um valor de um intervalo para outro
+def map_value(x, in_min, in_max, out_min, out_max):
+    return int((x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min)
+
+# Configuração do Servo (usando PWM)
+# Frequência de 50Hz, ciclo de trabalho de 25 a 128 (aproximadamente 2.5% a 12.5%)
+servo = PWM(Pin(17), freq=50)
+servo2 = PWM(Pin(18), freq=50)
+
+# Função para configurar o cliente MQTT e conectar ao broker
+def setup_mqtt():
+    client = MQTTClient("ESPClient", mqtt_server)
+    client.set_callback(on_message)
+    client.connect()
+    print("Connected to MQTT broker")
+
+    # Inscrevendo-se no tópico
+    client.subscribe(topic_subscribe)
+    print(f"Subscribed to topic {topic_subscribe}")
+
+    return client
+
+# Função principal para loop infinito de execução
+def main():
+    global start_time
+    connect_wifi()
+    client = setup_mqtt()
+    start_time = time.time()  # Marca o tempo de início do programa
+
+    try:
+        while True:
+            # Aguarda novas mensagens e executa callback
+            client.wait_msg()
+    except KeyboardInterrupt:
+        print("Disconnecting from MQTT broker...")
+        client.disconnect()
+        print("Disconnected")
+
+if __name__ == "__main__":
+    main()
